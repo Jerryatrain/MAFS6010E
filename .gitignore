@@ -1,3 +1,8 @@
 /.DS_Store
 /barra_dat
 /factor_dat
+*.csv
+*.xlsx
+*.parquet
+backtest_sample/.DS_Store
+*.jpg
