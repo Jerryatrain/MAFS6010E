@@ -13,6 +13,20 @@ import matplotlib.pyplot as plt
 import warnings
 warnings.filterwarnings("ignore")
 
+def get_turnover(buy_list, change_n):
+    turnover_dict = {}
+
+    for i, day in enumerate(buy_list.index,1):
+        if day == buy_list.index[0]:
+            temp_list = buy_list.loc[day]
+        else:
+            if i % change_n == 0:
+                turnover = len(set(buy_list.loc[day].dropna().index).difference(set(temp_list.dropna().index)))/len(temp_list.dropna().index)
+                turnover_dict[day] = turnover
+                temp_list = buy_list.loc[day]
+            
+    return pd.DataFrame.from_dict(turnover_dict,orient='index',columns=['turnover'])
+
 def change_stock_name(stock_name:str):
     if stock_name.endswith('.XSHE'):
         return stock_name.replace('.XSHE', '.SZ')
@@ -67,7 +81,7 @@ def get_buy_list(df,top_type = 'rank',rank_n = 100,quantile_q = 0.8):
     :return df: 买入队列 -> dataframe/unstack
     """
     if top_type == 'rank':
-        df = df.rank(axis  = 1,ascending=False) <= rank_n
+        df = df.rank(axis  = 1,ascending=False, method='first') <= rank_n
     elif top_type == 'quantile':
         df = df.sub(df.quantile(quantile_q,axis = 1),axis = 0) > 0
     else:
@@ -129,11 +143,11 @@ def RiskParity(weights,temp_cov):
     return sum(delta_TRC)
 
 
-# 效用理论 https://zhuanlan.zhihu.com/p/54897308
+# 效用理论
 def utility_theory(weights,temp_ret):
     p_r = (1 + np.dot(weights,temp_ret.mean())) ** 252 - 1
     temp_cov = temp_ret.cov()
-    lam = 10 # 超参数可以调整
+    lam = 10 
     p_sigma = np.sqrt(np.dot(weights.T,np.dot(temp_cov,weights)) * 252) 
     p_utility = p_r - (lam / 2  * p_sigma)
     return -1 * p_utility
@@ -214,7 +228,7 @@ def optimizer(df,weight_down_limit = 0,weight_up_limit = 0.03,option = 'equal_vo
             elif option == 'equal_vol':
                 #等波动率
                 wts = 1/temp_ret.std()
-                weights_temp = (wts/wts.sum())#.to_frame(temp_stock_list)
+                weights_temp = (wts/wts.sum())
                 weights_df.loc[temp_date] = weights_temp
 
             elif option == 'min_variance':
@@ -339,8 +353,8 @@ def backtest(df_weight, change_n = 20, cash = 10000 * 1000, tax = 0.0005, other_
     
     return account
 
-def get_performance_analysis(account_result, option, name = ' ',rf = 0.02,benchmark_index = '000985.SH'):
-
+def get_performance_analysis(account_result, option, fig_save_path, name = ' ',rf = 0.02,benchmark_index = '000985.SH'):
+    
     # 加入基准    
     benchmark = get_benchmark(account_result,benchmark_index)
     benchmark.index = pd.to_datetime(benchmark.index)
@@ -432,6 +446,9 @@ def get_performance_analysis(account_result, option, name = ' ',rf = 0.02,benchm
     # 盈亏比
     profit_lose = performance_pct.groupby('win')[alpha_name].mean()
     Profit_Lose_Ratio = abs(profit_lose[True]/profit_lose[False])
+
+    # 换手率
+    turnover = performance_pct[benchmark_name].abs().mean()
     
 
     result = {
@@ -504,19 +521,23 @@ def get_performance_analysis(account_result, option, name = ' ',rf = 0.02,benchm
 
     # 显示图例
     ax.legend()
-    fig.savefig(os.path.join(fc.ROOT_DIR,'sample',f'backtest_result_{option}.png'), bbox_inches='tight')
+    fig.savefig(os.path.join(fig_save_path,f'backtest_result_{option}.png'), bbox_inches='tight')
 
     return result
 
-if __name__=='__main__':
+def main_A_all():
     option_list = ['equal_weight','equal_vol','min_variance','min_active_variance',
                    'RiskParity','utility_theory','max_sharpe','max_ir','min_tr'] 
+    
+    fig_save_path = os.path.join(fc.ROOT_DIR,'csi500')
+
+
     for option in option_list:
         # if equal_weight_weight.pkl not exist
-        if not os.path.exists(os.path.join(fc.ROOT_DIR,'sample',f'{option}.pkl')):
+        if not os.path.exists(os.path.join(fig_save_path,f'{option}.pkl')):
             print(f'generate {option}.pkl')
             # 获取因子
-            df = pd.read_pickle(os.path.join(fc.ROOT_DIR,'sample','icirw_combo_neu.pkl'))
+            df = pd.read_pickle(os.path.join(fig_save_path,'icirw_combo_neu.pkl'))
             df.columns = [change_stock_name(i) for i in df.columns]
 
             buy_list = get_buy_list(df,rank_n=20) #top_type='quantile',quantile_q=0.0
@@ -524,12 +545,63 @@ if __name__=='__main__':
             buy_list.count(axis = 1).plot()
 
             df_weight = optimizer(buy_list,option = option,weight_up_limit = 0.15,freq = 20)
-            df_weight.to_pickle(os.path.join(fc.ROOT_DIR,'sample',f'{option}.pkl'))
+            df_weight.to_pickle(os.path.join(fig_save_path,f'{option}.pkl'))
         
 
-        df_weight = pd.read_pickle(os.path.join(fc.ROOT_DIR,'sample',f'{option}.pkl'))
+        df_weight = pd.read_pickle(os.path.join(fig_save_path,f'{option}.pkl'))
         print('backtest start')
         df_weight.index = pd.to_datetime(df_weight.index)
 
         account_result = backtest(df_weight, change_n = 20, cash = 10000 * 1000, tax = 0.0, other_tax = 0.0, commission = 0.0, min_fee = 0, cash_interest_yield = 0.02)
         performance_result = get_performance_analysis(account_result, option)
+
+
+if __name__=='__main__':
+    option_list = ['equal_weight','equal_vol','min_variance','min_active_variance',
+                   'RiskParity','utility_theory','max_sharpe','max_ir','min_tr'] 
+    
+    fig_save_path = os.path.join(fc.ROOT_DIR,'csi500_200')
+
+    if not os.path.exists(fig_save_path):
+        os.makedirs(fig_save_path)
+
+
+    for option in option_list:
+        # if equal_weight_weight.pkl not exist
+        if True:# os.path.exists(os.path.join(fig_save_path,f'{option}.pkl')):
+            print(f'generate {option}.pkl')
+            # 获取因子
+            df = pd.read_parquet('prediction_xgb_outsample.parquet')
+            df = df.pivot_table(index='Date',columns='Symbol',values='pred')
+            df = df[df.index > '2019-01-01']
+
+            # choose only csi500 stocks
+            index = pd.read_parquet(os.path.join(fc.BARR_DIR,'idx__csi500_weight.parquet'))
+            index = index.pivot_table(index='Date',columns='Symbol',values='Weight')
+            index.index = pd.to_datetime(index.index, format='%Y%m%d')
+            index = index[index.index > '2019-01-01']
+
+            df = df[list(set(df.columns) & set(index.columns))]
+            
+            buy_list = get_buy_list(df,rank_n=200) #top_type='quantile',quantile_q=0.0
+            # 券池数量
+            buy_list.count(axis = 1).plot()
+
+            fig = plt.figure(figsize=(10,6))
+            turnover_df = get_turnover(buy_list, change_n=20)
+            plt.plot(turnover_df.index,turnover_df['turnover'])
+            plt.title(f'turnover_{option}')
+            fig.savefig(os.path.join(fig_save_path,f'turnover_{option}.png'))
+
+
+            df_weight = optimizer(buy_list,option = option,weight_up_limit = 0.15,freq = 20,benchmark = '000905.SH')
+            df_weight.to_pickle(os.path.join(fig_save_path,f'{option}.pkl'))
+            
+    
+
+        df_weight = pd.read_pickle(os.path.join(fig_save_path,f'{option}.pkl'))
+        print('backtest start')
+        df_weight.index = pd.to_datetime(df_weight.index)
+
+        account_result = backtest(df_weight, change_n = 20, cash = 10000 * 1000, tax = 0.0, other_tax = 0.0, commission = 0.0, min_fee = 0, cash_interest_yield = 0.02)
+        performance_result = get_performance_analysis(account_result, option, fig_save_path, benchmark_index='000905.SH')
