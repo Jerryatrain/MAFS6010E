@@ -7,6 +7,7 @@ import datetime as dt
 import job_config as jc
 import model_config as mc
 from joblib import Parallel, delayed
+os.chdir(r'/Users/jerrytang/Desktop/current/MAFS6010E/BARRA_model')
 # from Config import factor_config as fc
 # from Data_Update.data_update import update_data_net, update_data_local
 # from Functions.neut_function import get_neut_factor, get_factor_corr_barra

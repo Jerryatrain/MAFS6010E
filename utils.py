@@ -43,7 +43,7 @@ def get_factor(year_list:list):
     return pd.concat([pd.read_parquet(os.path.join(fc.FACTOR_DIR, f'factor_{year}.parquet')) for year in year_list])
 
 
-def get_price(stock_list:list, start_date, end_date):
+def get_price(stock_list, start_date, end_date):
     year_list = pd.date_range(start_date, end_date).year.unique().tolist()
 
     # load factors
@@ -51,6 +51,9 @@ def get_price(stock_list:list, start_date, end_date):
     factor['Date'] = pd.to_datetime(factor['Date'], format='%Y%m%d')
 
     # keep desired stocks and dates
+    if stock_list == []:
+        stock_list = factor.Symbol.unique().tolist()
+
     price = factor.loc[(factor.Symbol.isin(stock_list)) & (factor.Date >= start_date) & (factor.Date <= end_date), ['Symbol', 'Date', 'AdjVWAP']]
     return price.pivot(index='Date', columns='Symbol', values='AdjVWAP')
 
@@ -560,7 +563,7 @@ if __name__=='__main__':
     option_list = ['equal_weight','equal_vol','min_variance','min_active_variance',
                    'RiskParity','utility_theory','max_sharpe','max_ir','min_tr'] 
     
-    fig_save_path = os.path.join(fc.ROOT_DIR,'csi500_200')
+    fig_save_path = os.path.join(fc.ROOT_DIR,'csi500_50_fee')
 
     if not os.path.exists(fig_save_path):
         os.makedirs(fig_save_path)
@@ -583,7 +586,7 @@ if __name__=='__main__':
 
             df = df[list(set(df.columns) & set(index.columns))]
             
-            buy_list = get_buy_list(df,rank_n=200) #top_type='quantile',quantile_q=0.0
+            buy_list = get_buy_list(df,rank_n=50) #top_type='quantile',quantile_q=0.0
             # 券池数量
             buy_list.count(axis = 1).plot()
 
@@ -603,5 +606,5 @@ if __name__=='__main__':
         print('backtest start')
         df_weight.index = pd.to_datetime(df_weight.index)
 
-        account_result = backtest(df_weight, change_n = 20, cash = 10000 * 1000, tax = 0.0, other_tax = 0.0, commission = 0.0, min_fee = 0, cash_interest_yield = 0.02)
+        account_result = backtest(df_weight, change_n = 20, cash = 10000 * 1000, cash_interest_yield = 0.02)
         performance_result = get_performance_analysis(account_result, option, fig_save_path, benchmark_index='000905.SH')
