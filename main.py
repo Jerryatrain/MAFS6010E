@@ -13,7 +13,7 @@ def get_index_price(index:str, start_date:str, end_date:str, field:str='close'):
  
     return index.pivot(index='trade_date', columns='ts_code', values=field)
 
-def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.15):
+def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.20):
     # 定义要优化的变量，设置非负约束
     weights = cp.Variable(shape=(len(stock_today), 1), nonneg=True)
 
@@ -67,7 +67,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     weights_value = weights_value.set_index('Symbol')['weight'].to_dict()
     return weights_value, problem.status
 
-def trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost = 0.0, buy_trade_cost = 0.0, drop_list=[]):
+def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_trade, sell_trade_cost = 0.0, buy_trade_cost = 0.0, drop_list=[]):
 
     weight_diff = pd.merge(left=past_weight, right=trade_target, on='Symbol', how='outer')
     weight_diff.fillna(0, inplace=True)
@@ -79,13 +79,18 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_tr
         -weight_diff.loc[weight_diff['trade_weight'] == 0, 'past_weight']
 
 
-
     sell_list = list(weight_diff.loc[np.where((weight_diff['diff'] < 0)
                                                 & (weight_diff['vwap_next'] != 0)), 'Symbol'])
     buy_list = list(weight_diff.loc[np.where((weight_diff['diff'] > 0)
                                                 & (weight_diff['vwap_next'] != 0)), 'Symbol'])
     stable_list = [stock_ for stock_ in holding_df.index if stock_ not in sell_list + buy_list]
     stable_list.remove('cash')
+
+    if non_trade!=0:
+        sell_list = []
+        buy_list = []
+        stable_list= [stock_ for stock_ in holding_df.index]
+        stable_list.remove('cash')
 
     past_value = holding_df['past_value'].sum()  # 前一天持有的所有资产，因为要提前做交易单，所以按前一天净值算
     # 未停牌的能卖出的按开盘价结算卖出
@@ -150,7 +155,7 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_tr
 
     return holding_df, turnover_rate
 
-def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', barra_limit = 0.3):
+def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
     # get prediction
     score_df = pd.read_parquet('prediction_xgb_outsample.parquet')
     score_df.reset_index(inplace=True)
@@ -172,8 +177,14 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
     score_df = pd.merge(score_df, return_df, on=['Date', 'Symbol'], how='left')
     score_df.dropna(inplace=True)
 
+    index_data_dict = {
+        '000905.SH': 'idx__csi500_weight.parquet',
+        '000300.SH': 'idx__csi300_weight.parquet',
+        '000852.SH': 'idx__csi1000_weight.parquet',
+    }
+
     # get index weight
-    index_weight = pd.read_parquet(os.path.join(fc.BARR_DIR, 'idx__csi500_weight.parquet'))
+    index_weight = pd.read_parquet(os.path.join(fc.BARR_DIR, index_data_dict[chosen_index]))
     index_weight = index_weight[['Date','Symbol', 'Weight']]
     index_weight['Date'] = pd.to_datetime(index_weight['Date'])
     index_weight = pd.merge(index_weight, return_df, on=['Date', 'Symbol'], how='left')
@@ -252,7 +263,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
         _date = date_list[date_num]
         next_date = date_list[date_num + 1]
         stock_today = score_df[score_df['Date'] == _date]
-        stock_today.dropna(inplace=True)
+        stock_today.dropna(subset='vwap',inplace=True)
         index_today = df_index.loc[_date]
         holding_df = holding_record[_date]
 
@@ -299,7 +310,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
             nan_df['trade_weight'] = 0
             trade_target = pd.concat([trade_target, nan_df], axis=0)
             today_stock_return = return_df[return_df['Date'] == _date][['Date', 'Symbol', 'vwap', 'vwap_next']]
-            holding_df, turnover_rate = trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost=0.0005, buy_trade_cost=0.0005, drop_list = drop_list)   
+            holding_df, turnover_rate = trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost=0.0005, buy_trade_cost=0.0005, non_trade=date_num%trade_freq, drop_list = drop_list)   
 
         else:
             try:
@@ -323,16 +334,16 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
             trade_target.columns = ['Symbol', 'trade_weight']
             today_stock_return = return_df[return_df['Date'] == _date][['Date', 'Symbol', 'vwap', 'vwap_next']]
 
-            holding_df, turnover_rate = trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost=0.0005, buy_trade_cost=0.0005)
+            holding_df, turnover_rate = trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost=0.0005, buy_trade_cost=0.0005,non_trade=date_num%trade_freq)
 
-        # 净值和持仓记录
+        # hodling record
         holding_record[next_date] = holding_df
         asset_record.loc[next_date] = holding_df['past_value'].sum() / initial_asset
         turnover_record.loc[next_date] = turnover_rate
         today_mkt = pd.DataFrame(holding_df).reset_index()
         today_mkt['Date'] = next_date
 
-        # 计算barra暴露
+        # calculate barra difference
         today_barra = pd.DataFrame(holding_df).reset_index()
         today_barra['Date'] = next_date
         today_barra_all = barra_df[barra_df['Date'] == next_date]
@@ -346,27 +357,27 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
             diff = today_barra[_barr].sum() - index_next[_barr]
             barra_daily_record[_barr].loc[next_date] = [index_next[_barr], diff, today_barra[_barr].sum()]
 
-    # 生成回测文档
-    asset_record.loc[asset_record.index[0] - timedelta(days=1), 'asset'] = 1  # 加入初始日期
+    # CALCULATE ABSOLUTE RETURN
+    asset_record.loc[asset_record.index[0] - timedelta(days=1), 'asset'] = 1  # initialize the first day as 1
     asset_record.sort_index(inplace=True)
     asset_record.reset_index(inplace=True)
     asset_record.columns = ['Date', 'origin']
     index_init = index_return[index_return['Date'] <= asset_record['Date'].iloc[0]]['index_close'].iloc[-1]
     asset_record = pd.merge(left=asset_record, right=index_return[['Date', 'index_close']], on=['Date'], how='left')
-    asset_record.fillna(index_init, inplace=True)  # 有可能指数在首日没有数值
+    asset_record.fillna(index_init, inplace=True) 
     asset_record['index_close'] = asset_record['index_close'] / index_init
     asset_record['asset'] = asset_record['origin'] / asset_record['index_close']
 
     asset_record['return_rate'] = asset_record['asset'].pct_change()
-    asset_record['max_draw_down'] = asset_record['asset'].expanding().max()  # 累计收益率的历史最大值
-    asset_record['max_draw_down'] = asset_record['asset'] / asset_record['max_draw_down'] - 1  # 回撤
+    asset_record['max_draw_down'] = asset_record['asset'].expanding().max() 
+    asset_record['max_draw_down'] = asset_record['asset'] / asset_record['max_draw_down'] - 1  
     asset_record['trade_year'] = asset_record['Date'].dt.year
 
     if not os.path.exists('./backtest_sample'):
         os.makedirs('./backtest_sample')
 
-    # 图1：绝对收益、指数收益、超额收益
-    fig, ax1 = plt.subplots(figsize=(10, 5))  # 创建一个图表对象fig和一个坐标轴对象ax1，设置画布大小
+    # ABSOLUTE RETURN
+    fig, ax1 = plt.subplots(figsize=(10, 5)) 
     ax2 = ax1.twinx()
     bar_width = pd.Timedelta(days=1)  # 设置柱状图柱状的宽度为1天
     ax2.bar(list(asset_record['Date']), list(asset_record['asset'] - 1), width=bar_width,
@@ -379,10 +390,10 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
     plt.legend(lines + lines2, labels + labels2, loc='upper left')
     plt.savefig(r"./backtest_sample/abs_asset.jpg", dpi=1000)
 
-    # 图2： 超额收益、超额最大回撤
-    fig, ax1 = plt.subplots(figsize=(10, 5))  # 创建一个图表对象fig和一个坐标轴对象ax1，设置画布大小
+    # ALPHA
+    fig, ax1 = plt.subplots(figsize=(10, 5)) 
     ax2 = ax1.twinx()
-    bar_width = pd.Timedelta(days=1)  # 设置柱状图柱状的宽度为xx天 len(date_list)/50+1
+    bar_width = pd.Timedelta(days=1)  
     ax2.bar(asset_record['Date'], asset_record['max_draw_down'], width=bar_width,
             color='skyblue', label='maximum drawdown', alpha=0.5)
     ax1.plot(list(asset_record['Date']), list(asset_record['asset']), color='red', label='净值走势')
@@ -393,10 +404,10 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
     plt.savefig(r"./backtest_sample/increase_asset.jpg", dpi=1000)
 
 
-    # 图3：换手率走势
-    fig, ax1 = plt.subplots(figsize=(10, 5))  # 创建一个图表对象fig和一个坐标轴对象ax1，设置画布大小
-    turnover_figure = turnover_record.iloc[1:]  # 第一天建仓，数据没意义
-    ax1.plot(list(turnover_figure.index), list(turnover_figure['turnover_rate']), color='red', label='换手率走势')
+    # TURNOVER
+    fig, ax1 = plt.subplots(figsize=(10, 5))  
+    turnover_figure = turnover_record.iloc[1:]  
+    ax1.plot(list(turnover_figure.index), list(turnover_figure['turnover_rate']), color='red', label='turnover')
     plt.title('Turnover')
     lines, labels = ax1.get_legend_handles_labels()
     plt.legend(lines, labels, loc='upper left')
@@ -404,9 +415,9 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
 
 
-    # 图5-15：barra图
+    # BARRA
     for name in barra_daily_record.keys():
-        fig, ax = plt.subplots(figsize=(10, 5))  # 创建一个图表对象fig和一个坐标轴对象ax1，设置画布大小
+        fig, ax = plt.subplots(figsize=(10, 5)) 
         df = barra_daily_record[name]
         ax.plot(list(df.index), list(df['index']), color='red', label='index %s barra'%name)
         ax2 = ax.twinx()
@@ -439,7 +450,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
     yr = pd.merge(yr, max_drawdown_yr, on=['trade_year'], how='left')
     yr.to_excel(r"./backtest_sample/yr_record.xlsx", index=False)
 
-    # 总体收益、夏普、回撤
+    # xlsx
     return_all = asset_record.tail(1)
     all_days = asset_record.shape[0]
     return_all['return_all'] = round(return_all['asset'] ** (252 / all_days) - 1, 5)
@@ -453,10 +464,11 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
 if __name__ == '__main__':
     startdate = '2019-01-01'
-    enddate = '2023-12-31'
-    chosen_index = '000905.SH'
+    enddate = '2024-10-01'
+    chosen_index = '000852.SH'
     barra_limit = 0.3
+    trade_freq= 5
 
-    main(startdate, enddate, chosen_index, barra_limit = 0.3)
+    main(startdate, enddate, chosen_index,trade_freq, barra_limit)
 
 
