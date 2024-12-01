@@ -27,8 +27,8 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     constraints.append(weights <= 0.01)
 
     # 3. 行业权重限制与指数的差异限制为5%
-    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] <= 0.05)
-    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] >= -0.05)
+    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] <= 0.10)
+    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] >= -0.10)
 
     # 4. barra 偏离限制
     for _barra in barra_list:
@@ -54,8 +54,8 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
         problem.solve()
 
     weights_value = weights.value
-    if weights_value is None:
-        return past_weight.set_index('Symbol')['past_weight'].to_dict(), problem.status
+    # if weights_value is None:
+    #     return past_weight.set_index('Symbol')['past_weight'].to_dict(), problem.status
     weights_value = pd.concat([stock_today[['Symbol']].reset_index(drop=True),
                                 pd.DataFrame(weights_value[:, 0], columns=['weight']).reset_index(drop=True)],
                                 axis=1)
@@ -68,7 +68,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     return weights_value, problem.status
 
 def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_trade, sell_trade_cost = 0.0, buy_trade_cost = 0.0, drop_list=[]):
-
+    # pass value includes past hoding merged with today's stock, it contains all stocks, including newly entered stocks
     weight_diff = pd.merge(left=past_weight, right=trade_target, on='Symbol', how='outer')
     weight_diff.fillna(0, inplace=True)
     weight_diff = weight_diff[(weight_diff['past_weight'] != 0) | (weight_diff['trade_weight'] != 0)]  # 有交易的trade_target
@@ -98,6 +98,7 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
 
     for stock_ in sell_list:
+        print()
         stock_info = weight_diff[weight_diff['Symbol'] == stock_]
         next_holding = holding_df.loc[stock_, 'past_value'] / stock_info['vwap'].iloc[0] \
                         * stock_info['vwap_next'].iloc[0]  # 转日开盘后个股价值
@@ -108,6 +109,7 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
                                                 / stock_info['past_weight'].iloc[0]  # 持仓改变
         total_sell += -next_holding * stock_info['diff'].iloc[0] \
                                                 / stock_info['past_weight'].iloc[0] * (1 - sell_trade_cost)
+    
     for stock_ in drop_list:  # 直接被收购退市的，按价值卖出
         holding_df.loc['cash', 'past_value'] += holding_df.loc[stock_, 'past_value'] * (1 - sell_trade_cost)
         holding_df.loc[stock_, 'past_value'] = 0
@@ -156,14 +158,19 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
     return holding_df, turnover_rate
 
 def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
-    # get prediction
-    score_df = pd.read_parquet('prediction_xgb_outsample.parquet')
+# get prediction
+    score_df = pd.read_parquet('pred1.parquet')
     score_df.reset_index(inplace=True)
+    score_df['Date'] = pd.to_datetime(score_df['Date'])
+    score_df.columns = ['Date', 'Symbol', 'pred']
 
     # get return data
     return_df = get_price([],startdate, enddate)
     return_df = return_df.stack().reset_index().rename(columns={0:'vwap'})
     return_df['vwap_next'] = return_df.groupby('Symbol')['vwap'].shift(-1)
+    # if vwap_next is nan, fill with vwap
+    return_df['vwap_next'].fillna(return_df['vwap'], inplace=True)
+    return_df['Date'] = pd.to_datetime(return_df['Date'])
 
     # get barra and industrial data
     barra_df = pd.read_parquet(os.path.join(fc.BARR_DIR, 'BarraFactorTable.parquet'))
@@ -271,6 +278,8 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
         past_weight['past_value'] = past_weight['past_value'] / past_weight['past_value'].sum()
         past_weight.columns = ['Symbol', 'past_weight']
         past_weight = past_weight[past_weight['Symbol'] != 'cash']
+
+        # at 35, new stocks are added to stock today
         past_weight = pd.merge(left=stock_today[['Symbol']], right=past_weight,
                                     on='Symbol', how='outer')
         past_weight.fillna(0, inplace=True)
@@ -281,7 +290,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
         barra_limit_tmp = barra_limit
         # 可能有突然被收购股
-        nan_df = stock_today[pd.isna(stock_today['pred'])]
+        nan_df = stock_today[pd.isna(stock_today['Weight'])]
         if len(nan_df) > 0:
             drop_list = list(nan_df['Symbol'])
             stock_today_drop = stock_today[~stock_today['Symbol'].isin(drop_list)]
@@ -303,13 +312,14 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
                 turnover += 0.05
                 opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight_drop,
                                                         stock_today_drop, index_today, barra_limit_tmp, turnover=turnover)
-            # 进行交易
+            # trading record
             trade_target = pd.DataFrame(opt_weight[_date].values(), index=opt_weight[_date].keys()).reset_index()
             trade_target.columns = ['Symbol', 'trade_weight']
             nan_df = pd.DataFrame({'Symbol':drop_list})
             nan_df['trade_weight'] = 0
             trade_target = pd.concat([trade_target, nan_df], axis=0)
             today_stock_return = return_df[return_df['Date'] == _date][['Date', 'Symbol', 'vwap', 'vwap_next']]
+            # nan df could contain stocks that are not in return_df, need to fill return df's vwap and vwap_next
             holding_df, turnover_rate = trade_cal(past_weight, holding_df, trade_target, today_stock_return, sell_trade_cost=0.0005, buy_trade_cost=0.0005, non_trade=date_num%trade_freq, drop_list = drop_list)   
 
         else:
@@ -463,11 +473,11 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
 
 if __name__ == '__main__':
-    startdate = '2019-01-01'
+    startdate = '2021-01-01'
     enddate = '2024-10-01'
-    chosen_index = '000852.SH'
+    chosen_index = '000300.SH'
     barra_limit = 0.3
-    trade_freq= 5
+    trade_freq= 1
 
     main(startdate, enddate, chosen_index,trade_freq, barra_limit)
 
