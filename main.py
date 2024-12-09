@@ -157,9 +157,9 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
     return holding_df, turnover_rate
 
-def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
+def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
 # get prediction
-    score_df = pd.read_parquet('pred2.parquet')
+    score_df = pd.read_parquet(score_path)
     score_df.reset_index(inplace=True)
     score_df['Date'] = pd.to_datetime(score_df['Date'])
     score_df.columns = ['Date', 'Symbol', 'pred']
@@ -475,12 +475,13 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
 
 if __name__ == '__main__':
+    score_path = 'pred2.parquet'
     startdate = '2012-01-01'
     enddate = '2014-01-01'
     chosen_index = '000300.SH'
     barra_limit = 0.3
     trade_freq= 5
 
-    main(startdate, enddate, chosen_index,trade_freq, barra_limit)
+    main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit)
 
 
