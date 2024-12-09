@@ -98,7 +98,6 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
 
     for stock_ in sell_list:
-        print()
         stock_info = weight_diff[weight_diff['Symbol'] == stock_]
         next_holding = holding_df.loc[stock_, 'past_value'] / stock_info['vwap'].iloc[0] \
                         * stock_info['vwap_next'].iloc[0]  # 转日开盘后个股价值
@@ -111,9 +110,10 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
                                                 / stock_info['past_weight'].iloc[0] * (1 - sell_trade_cost)
     
     for stock_ in drop_list:  # 直接被收购退市的，按价值卖出
-        holding_df.loc['cash', 'past_value'] += holding_df.loc[stock_, 'past_value'] * (1 - sell_trade_cost)
-        holding_df.loc[stock_, 'past_value'] = 0
-        total_sell += holding_df.loc[stock_, 'past_value'] * (1 - sell_trade_cost)
+        if stock_ in holding_df.index:
+            holding_df.loc['cash', 'past_value'] += holding_df.loc[stock_, 'past_value'] * (1 - sell_trade_cost)
+            holding_df.loc[stock_, 'past_value'] = 0
+            total_sell += holding_df.loc[stock_, 'past_value'] * (1 - sell_trade_cost)
 
     # 剩余的钱且未停牌的按weight重置进行买入
     buy_df = weight_diff[weight_diff['Symbol'].isin(buy_list)]['diff'].sum()
@@ -159,7 +159,7 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
 def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
 # get prediction
-    score_df = pd.read_parquet('pred1.parquet')
+    score_df = pd.read_parquet('pred2.parquet')
     score_df.reset_index(inplace=True)
     score_df['Date'] = pd.to_datetime(score_df['Date'])
     score_df.columns = ['Date', 'Symbol', 'pred']
@@ -181,8 +181,10 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
     return_df = pd.merge(return_df, barra_df, on=['Date', 'Symbol'], how='left')
 
     # merge barra, industrial and return data to score
-    score_df = pd.merge(score_df, return_df, on=['Date', 'Symbol'], how='left')
-    score_df.dropna(inplace=True)
+    score_df = pd.merge(score_df, return_df.drop('vwap_next', axis=1), on=['Date', 'Symbol'], how='left')
+    score_df.sort_values(['Date', 'Symbol'], inplace=True)
+    score_df['vwap_next'] = score_df.groupby('Symbol')['vwap'].shift(-1)
+    score_df.dropna(subset='vwap', inplace=True) # there could be problem
 
     index_data_dict = {
         '000905.SH': 'idx__csi500_weight.parquet',
@@ -239,7 +241,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
     # only consider stocks in index
     score_df = pd.merge(score_df, index_weight[['Date', 'Symbol', 'Weight']], on=['Date', 'Symbol'], how = 'left')
-    score_df = score_df[score_df['Weight'].notna()]
+    # score_df = score_df[score_df['Weight'].notna()]
 
     date_list = score_df['Date'].drop_duplicates().sort_values().to_list()
     opt_weight = {}  # 字典形式储存结果
@@ -290,7 +292,7 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
         barra_limit_tmp = barra_limit
         # 可能有突然被收购股
-        nan_df = stock_today[pd.isna(stock_today['Weight'])]
+        nan_df = stock_today[pd.isna(stock_today['vwap_next'])]
         if len(nan_df) > 0:
             drop_list = list(nan_df['Symbol'])
             stock_today_drop = stock_today[~stock_today['Symbol'].isin(drop_list)]
@@ -473,11 +475,11 @@ def main(startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '00090
 
 
 if __name__ == '__main__':
-    startdate = '2021-01-01'
-    enddate = '2024-10-01'
+    startdate = '2012-01-01'
+    enddate = '2014-01-01'
     chosen_index = '000300.SH'
     barra_limit = 0.3
-    trade_freq= 1
+    trade_freq= 5
 
     main(startdate, enddate, chosen_index,trade_freq, barra_limit)
 
