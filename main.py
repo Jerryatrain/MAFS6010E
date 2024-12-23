@@ -13,7 +13,7 @@ def get_index_price(index:str, start_date:str, end_date:str, field:str='close'):
  
     return index.pivot(index='trade_date', columns='ts_code', values=field)
 
-def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.20):
+def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.30):
     # 定义要优化的变量，设置非负约束
     weights = cp.Variable(shape=(len(stock_today), 1), nonneg=True)
 
@@ -26,14 +26,16 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     # 2. 个股权重限制为1%
     constraints.append(weights <= 0.01)
 
-    # 3. 行业权重限制与指数的差异限制为5%
-    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] <= 0.10)
-    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] >= -0.10)
+    # # 3. 行业权重限制与指数的差异限制为5%
+    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] <= 0.5)
+    constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] >= -0.5)
 
     # 4. barra 偏离限制
-    for _barra in barra_list:
-        constraints.append(weights[:, 0] @ stock_today[_barra] - index_today[_barra] <= barra_limit)
-        constraints.append(weights[:, 0] @ stock_today[_barra] - index_today[_barra] >= -barra_limit)
+    # for _barra in barra_list:
+    #     constraints.append(weights[:, 0] @ stock_today[_barra] - index_today[_barra] <= barra_limit)
+    #     constraints.append(weights[:, 0] @ stock_today[_barra] - index_today[_barra] >= -barra_limit)
+    constraints.append(weights[:, 0] @ stock_today[barra_list] - index_today[barra_list] <= barra_limit)
+    constraints.append(weights[:, 0] @ stock_today[barra_list] - index_today[barra_list] >= -barra_limit)
 
     # 5. 限制换手率（权重变化的总和）为15%
     trade_cost_sum = cp.sum(cp.abs(weights - past_weight[['past_weight']].iloc[:len(stock_today)]))
@@ -49,7 +51,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     problem = cp.Problem(cp.Maximize(obj), constraints)
 
     try:
-        problem.solve(solver='ECOS', qcp=True, max_iters=2000)
+        problem.solve(solver='ECOS', qcp=True)
     except:
         problem.solve()
 
@@ -67,7 +69,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     weights_value = weights_value.set_index('Symbol')['weight'].to_dict()
     return weights_value, problem.status
 
-def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_trade, sell_trade_cost = 0.0, buy_trade_cost = 0.0, drop_list=[]):
+def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_trade, sell_trade_cost = 0.00005, buy_trade_cost = 0.00005, drop_list=[]):
     # pass value includes past hoding merged with today's stock, it contains all stocks, including newly entered stocks
     weight_diff = pd.merge(left=past_weight, right=trade_target, on='Symbol', how='outer')
     weight_diff.fillna(0, inplace=True)
@@ -162,6 +164,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     score_df = pd.read_parquet(score_path)
     score_df.reset_index(inplace=True)
     score_df['Date'] = pd.to_datetime(score_df['Date'])
+    score_df = score_df[['Date', 'Symbol', 'mean']]
     score_df.columns = ['Date', 'Symbol', 'pred']
 
     # get return data
@@ -292,7 +295,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
         barra_limit_tmp = barra_limit
         # 可能有突然被收购股
-        nan_df = stock_today[pd.isna(stock_today['vwap_next'])]
+        nan_df = stock_today[pd.isna(stock_today['Country'])]
         if len(nan_df) > 0:
             drop_list = list(nan_df['Symbol'])
             stock_today_drop = stock_today[~stock_today['Symbol'].isin(drop_list)]
@@ -419,6 +422,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     # TURNOVER
     fig, ax1 = plt.subplots(figsize=(10, 5))  
     turnover_figure = turnover_record.iloc[1:]  
+    turnover_figure.to_excel(r"./backtest_sample/turnover_rate.xlsx")
     ax1.plot(list(turnover_figure.index), list(turnover_figure['turnover_rate']), color='red', label='turnover')
     plt.title('Turnover')
     lines, labels = ax1.get_legend_handles_labels()
@@ -475,11 +479,11 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
 
 if __name__ == '__main__':
-    score_path = 'pred2.parquet'
-    startdate = '2012-01-01'
-    enddate = '2014-01-01'
-    chosen_index = '000300.SH'
-    barra_limit = 0.3
+    score_path = 'result_week_daily_test.parquet'
+    startdate = '2022-01-01'
+    enddate = '2024-10-10'
+    chosen_index = '000905.SH'
+    barra_limit = 0.5
     trade_freq= 5
 
     main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit)
