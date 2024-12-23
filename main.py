@@ -13,7 +13,7 @@ def get_index_price(index:str, start_date:str, end_date:str, field:str='close'):
  
     return index.pivot(index='trade_date', columns='ts_code', values=field)
 
-def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.30):
+def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, index_today, barra_limit, turnover=0.30, num_stock=1000):
     # 定义要优化的变量，设置非负约束
     weights = cp.Variable(shape=(len(stock_today), 1), nonneg=True)
 
@@ -24,7 +24,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     constraints.append(cp.sum(weights) == 1)
 
     # 2. 个股权重限制为1%
-    constraints.append(weights <= 0.01)
+    constraints.append(weights <= 1/num_stock)
 
     # # 3. 行业权重限制与指数的差异限制为5%
     constraints.append(weights[:, 0] @ stock_today[industry_list] - index_today[industry_list] <= 0.5)
@@ -159,7 +159,7 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
     return holding_df, turnover_rate
 
-def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3):
+def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3, num_stock=1000):
 # get prediction
     score_df = pd.read_parquet(score_path)
     score_df.reset_index(inplace=True)
@@ -303,20 +303,20 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
             try:
                 opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight_drop,
-                                                        stock_today_drop, index_today, barra_limit_tmp, turnover=0.15)
+                                                        stock_today_drop, index_today, barra_limit_tmp, turnover=0.15, num_stock=num_stock)
             except:
                 try:
                     opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight_drop,
-                                                            stock_today_drop, index_today, barra_limit_tmp, turnover=0.2)
+                                                            stock_today_drop, index_today, barra_limit_tmp, turnover=0.2, num_stock=num_stock)
                 except:
                         barra_limit_tmp += barra_limit/2
                         opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight_drop,
-                                                            stock_today_drop, index_today, barra_limit_tmp, turnover=0.2)
+                                                            stock_today_drop, index_today, barra_limit_tmp, turnover=0.2, num_stock=num_stock)
             turnover = 0.2
             while status not in ['optimal', 'optimal_inaccurate']:
                 turnover += 0.05
                 opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight_drop,
-                                                        stock_today_drop, index_today, barra_limit_tmp, turnover=turnover)
+                                                        stock_today_drop, index_today, barra_limit_tmp, turnover=turnover, num_stock=num_stock)
             # trading record
             trade_target = pd.DataFrame(opt_weight[_date].values(), index=opt_weight[_date].keys()).reset_index()
             trade_target.columns = ['Symbol', 'trade_weight']
@@ -330,20 +330,20 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
         else:
             try:
                 opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight,
-                                                        stock_today, index_today, barra_limit_tmp, turnover=0.15)
+                                                        stock_today, index_today, barra_limit_tmp, turnover=0.15, num_stock=num_stock)
             except:
                 try:
                     opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight,
-                                                                stock_today, index_today, barra_limit_tmp, turnover=0.2)
+                                                                stock_today, index_today, barra_limit_tmp, turnover=0.2, num_stock=num_stock)
                 except:
                         barra_limit_tmp += barra_limit/2
                         opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight,
-                                                            stock_today, index_today, barra_limit_tmp, turnover=0.2)
+                                                            stock_today, index_today, barra_limit_tmp, turnover=0.2, num_stock=num_stock)
             turnover = 0.2
             while status not in ['optimal', 'optimal_inaccurate']:
                 turnover += 0.05
                 opt_weight[_date], status = port_opt(['pred'], industry_list, barra_list, past_weight,
-                                                        stock_today, index_today, barra_limit_tmp, turnover=turnover)
+                                                        stock_today, index_today, barra_limit_tmp, turnover=turnover, num_stock=num_stock)
                 
             trade_target = pd.DataFrame(opt_weight[_date].values(), index=opt_weight[_date].keys()).reset_index()
             trade_target.columns = ['Symbol', 'trade_weight']
@@ -485,7 +485,8 @@ if __name__ == '__main__':
     chosen_index = '000905.SH'
     barra_limit = 0.5
     trade_freq= 5
+    num_stock = 1000
 
-    main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit)
+    main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit, num_stock)
 
 
