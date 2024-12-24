@@ -53,11 +53,12 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
     try:
         problem.solve(solver='ECOS', qcp=True)
     except:
-        problem.solve()
+        problem.solve(solver='SCS')
+
+    if problem.status=='infeasible':
+        return None, problem.status
 
     weights_value = weights.value
-    # if weights_value is None:
-    #     return past_weight.set_index('Symbol')['past_weight'].to_dict(), problem.status
     weights_value = pd.concat([stock_today[['Symbol']].reset_index(drop=True),
                                 pd.DataFrame(weights_value[:, 0], columns=['weight']).reset_index(drop=True)],
                                 axis=1)
@@ -160,7 +161,9 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
     return holding_df, turnover_rate
 
 def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3, num_stock=1000):
-# get prediction
+    
+    
+    # get prediction
     score_df = pd.read_parquet(score_path)
     score_df.reset_index(inplace=True)
     score_df['Date'] = pd.to_datetime(score_df['Date'])
@@ -184,7 +187,10 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     return_df = pd.merge(return_df, barra_df, on=['Date', 'Symbol'], how='left')
 
     # merge barra, industrial and return data to score
-    score_df = pd.merge(score_df, return_df.drop('vwap_next', axis=1), on=['Date', 'Symbol'], how='left')
+    score_df = pd.merge(score_df, return_df.drop('vwap_next', axis=1), on=['Date', 'Symbol'], how='right')
+    score_df['pred'] = score_df['pred'].ffill()
+    score_df.dropna(subset='pred', inplace=True)
+    score_df.dropna(subset='vwap', inplace=True)
     score_df.sort_values(['Date', 'Symbol'], inplace=True)
     score_df['vwap_next'] = score_df.groupby('Symbol')['vwap'].shift(-1)
     score_df.dropna(subset='vwap', inplace=True) # there could be problem
@@ -295,7 +301,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
         barra_limit_tmp = barra_limit
         # 可能有突然被收购股
-        nan_df = stock_today[pd.isna(stock_today['Country'])]
+        nan_df = stock_today[(pd.isna(stock_today['Country']))|(pd.isna(stock_today['vwap_next']))]
         if len(nan_df) > 0:
             drop_list = list(nan_df['Symbol'])
             stock_today_drop = stock_today[~stock_today['Symbol'].isin(drop_list)]
@@ -480,12 +486,12 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
 if __name__ == '__main__':
     score_path = 'result_week_daily_test.parquet'
-    startdate = '2022-01-01'
+    startdate = '2012-01-01'
     enddate = '2024-10-10'
     chosen_index = '000905.SH'
-    barra_limit = 0.5
+    barra_limit = 0.3
     trade_freq= 5
-    num_stock = 1000
+    num_stock = 100
 
     main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit, num_stock)
 
