@@ -4,6 +4,9 @@ import os
 from utils import *
 import cvxpy as cp
 from datetime import timedelta
+from tqdm import tqdm
+# import joblib
+from joblib import Parallel, delayed
 
 def get_index_price(index:str, start_date:str, end_date:str, field:str='close'):
     index_list = ['000300.SH', '000905.SH', '000852.SH', '000985.SH']
@@ -54,6 +57,7 @@ def port_opt(period_list, industry_list, barra_list, past_weight, stock_today, i
         problem.solve(solver='ECOS', qcp=True)
     except:
         problem.solve(solver='SCS')
+        
 
     if problem.status=='infeasible':
         return None, problem.status
@@ -160,14 +164,14 @@ def trade_cal(past_weight, holding_df, trade_target, today_stock_return, non_tra
 
     return holding_df, turnover_rate
 
-def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3, num_stock=1000):
+def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_index = '000905.SH', trade_freq=1,  barra_limit = 0.3, num_stock=1000, save_path = 'HCX_905_0.3_1_1000'):
     
     
     # get prediction
     score_df = pd.read_parquet(score_path)
     score_df.reset_index(inplace=True)
     score_df['Date'] = pd.to_datetime(score_df['Date'])
-    score_df = score_df[['Date', 'Symbol', 'mean']]
+    score_df = score_df[['Date', 'Symbol', 'pred']]
     score_df.columns = ['Date', 'Symbol', 'pred']
 
     # get return data
@@ -188,12 +192,10 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
 
     # merge barra, industrial and return data to score
     score_df = pd.merge(score_df, return_df.drop('vwap_next', axis=1), on=['Date', 'Symbol'], how='right')
-    score_df['pred'] = score_df['pred'].ffill()
-    score_df.dropna(subset='pred', inplace=True)
     score_df.dropna(subset='vwap', inplace=True)
     score_df.sort_values(['Date', 'Symbol'], inplace=True)
     score_df['vwap_next'] = score_df.groupby('Symbol')['vwap'].shift(-1)
-    score_df.dropna(subset='vwap', inplace=True) # there could be problem
+  
 
     index_data_dict = {
         '000905.SH': 'idx__csi500_weight.parquet',
@@ -394,8 +396,8 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     asset_record['max_draw_down'] = asset_record['asset'] / asset_record['max_draw_down'] - 1  
     asset_record['trade_year'] = asset_record['Date'].dt.year
 
-    if not os.path.exists('./backtest_sample'):
-        os.makedirs('./backtest_sample')
+    if not os.path.exists(f'./{save_path}'):
+        os.makedirs(f'./{save_path}')
 
     # ABSOLUTE RETURN
     fig, ax1 = plt.subplots(figsize=(10, 5)) 
@@ -409,7 +411,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     plt.legend(lines + lines2, labels + labels2, loc='upper left')
-    plt.savefig(r"./backtest_sample/abs_asset.jpg", dpi=1000)
+    plt.savefig(fr"./{save_path}/abs_asset.jpg", dpi=1000)
 
     # ALPHA
     fig, ax1 = plt.subplots(figsize=(10, 5)) 
@@ -422,18 +424,18 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     plt.legend(lines + lines2, labels + labels2, loc='upper left')
-    plt.savefig(r"./backtest_sample/increase_asset.jpg", dpi=1000)
+    plt.savefig(fr"./{save_path}/increase_asset.jpg", dpi=1000)
 
 
     # TURNOVER
     fig, ax1 = plt.subplots(figsize=(10, 5))  
     turnover_figure = turnover_record.iloc[1:]  
-    turnover_figure.to_excel(r"./backtest_sample/turnover_rate.xlsx")
+    turnover_figure.to_excel(fr"./{save_path}/turnover_rate.xlsx")
     ax1.plot(list(turnover_figure.index), list(turnover_figure['turnover_rate']), color='red', label='turnover')
     plt.title('Turnover')
     lines, labels = ax1.get_legend_handles_labels()
     plt.legend(lines, labels, loc='upper left')
-    plt.savefig(r"./backtest_sample/turnover_rate.jpg", dpi=1000)
+    plt.savefig(fr"./{save_path}/turnover_rate.jpg", dpi=1000)
 
 
 
@@ -450,7 +452,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
         plt.title('%s barra record'%name)
         lines, labels = ax.get_legend_handles_labels()
         plt.legend(lines, labels, loc='upper left')
-        plt.savefig(r"./backtest_sample/%s.jpg"%name, dpi=1000)
+        plt.savefig(fr"./{save_path}/%s.jpg"%name, dpi=1000)
 
 
     # close all figures
@@ -470,7 +472,7 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     max_drawdown_yr = (asset_record.groupby(['trade_year'])['max_draw_down'].min()).reset_index()
     yr = pd.merge(return_yr[['trade_year', 'return_yr']], sharpe_yr, on=['trade_year'], how='left')
     yr = pd.merge(yr, max_drawdown_yr, on=['trade_year'], how='left')
-    yr.to_excel(r"./backtest_sample/yr_record.xlsx", index=False)
+    yr.to_excel(fr"./{save_path}/yr_record.xlsx", index=False)
 
     # xlsx
     return_all = asset_record.tail(1)
@@ -481,18 +483,40 @@ def main(score_path, startdate = '2019-01-01', enddate = '2023-12-31', chosen_in
     max_drawdown_all = (asset_record['max_draw_down'].min())
     all_record = pd.DataFrame({'return_all': [return_all['return_all'].iloc[0]], 'sharpe_all': sharpe_all,
                             'max_drawdown_all': max_drawdown_all})
-    all_record.to_excel(r"./backtest_sample/all_record.xlsx", index=False)
+    all_record.to_excel(fr"./{save_path}/all_record.xlsx", index=False)
 
+
+def main_job(num_stock, barra_limit):
+    score_path = 'result_GRU.parquet'
+    startdate = '2024-01-01'
+    enddate = '2024-10-10'
+    chosen_index = '000852.SH'
+    trade_freq= 5
+    save_path = f'CHX_{chosen_index[3:6]}_{barra_limit}_{trade_freq}_{num_stock}'
+    main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit, num_stock, save_path)
 
 if __name__ == '__main__':
-    score_path = 'result_week_daily_test.parquet'
-    startdate = '2012-01-01'
-    enddate = '2024-10-10'
-    chosen_index = '000905.SH'
-    barra_limit = 0.3
-    trade_freq= 5
-    num_stock = 100
+    # score_path = 'result_GRU.parquet'
+    # startdate = '2015-01-01'
+    # enddate = '2024-10-10'
+    # chosen_index = '000852.SH'
+    # barra_limit = 0.3
+    # trade_freq= 5
+    # num_stock = 500
+    # save_path = f'HCX_{chosen_index[3:6]}_{barra_limit}_{trade_freq}_{num_stock}'
 
-    main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit, num_stock)
+
+    barra_limit_list = [0.1, 0.2, 0.3, 0.4, 0.5]
+    num_stock_list = [100, 200, 300]
+
+    # create a combination of barra limit and number of stock
+    # test_list = { (barra_limit, num_stock) for barra_limit in barra_limit_list for num_stock in num_stock_list}
+    # results = Parallel(n_jobs=-1)(delayed(main_job)(num_stock, barra_limit) for barra_limit, num_stock in test_list)
+
+    for barra_limit in barra_limit_list:
+        for num_stock in num_stock_list:
+            main_job(num_stock, barra_limit)
+
+    # main(score_path, startdate, enddate, chosen_index,trade_freq, barra_limit, num_stock, save_path)
 
 
