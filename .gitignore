@@ -8,4 +8,6 @@ backtest_sample/.DS_Store
 *.jpg
 *.png
 *.pkl
-ss
+
+BARRA_model/
+
